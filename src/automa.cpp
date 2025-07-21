@@ -1,17 +1,21 @@
 #include "../include/automa.h"
 #include <ode.h>
-#include <stdio.h>
-#include <typeinfo>
 #include <cmath>
 
-Automa::Automa(set<unsigned long>& stati){
+Locazione::Locazione(TipoStato s){
+  this->stato=s;
+  this->f_ODE=nullptr;
+  this->condizione=nullptr;
+}
+
+Automa::Automa(set<TipoStato>& stati){
   this->locazioni=set<Locazione>();
   for(unsigned long s : stati){
     this->locazioni.insert((const unsigned long)s);
   }
 }
 
-Automa::Automa(set<unsigned long> stati){
+Automa::Automa(set<TipoStato> stati){
   this->locazioni=set<Locazione>();
   for(unsigned long s : stati){
     this->locazioni.insert((const unsigned long)s);
@@ -73,37 +77,41 @@ void Automa::ImpostaCondizioneGuardia(TipoStato s, TipoInput i, bool (*g)(double
   }
 }
 
-gsl_matrix* Automa::Simulazione(gsl_vector* y0, TipoStato s0, double T, double h){
+gsl_matrix* Automa::Simulazione(gsl_vector* y0, TipoStato s0, double t0, double T, double h, queue<pair<double,TipoInput>> seqInput){
   TipoStato statoAttuale=s0;
   auto locazioneAttuale=this->locazioni.find(s0);
-  double t=0.0;
+  double t=t0;
   unsigned indiceIstante=0;
   unsigned NCampioni=(unsigned)floor(T/h)+1;
   gsl_vector* statoInizialeSim=gsl_vector_alloc(y0->size);
   gsl_vector_memcpy(statoInizialeSim,y0);
   gsl_matrix* O_sim_totale=gsl_matrix_calloc(y0->size,NCampioni);
   
-  while(t < T){
+  while(t < t0+T){
     //Ottengo i parametri per il solver
     auto f=locazioneAttuale->f_ODE;
     auto condizioneLoc=locazioneAttuale->condizione;
     double ultimoIstante=0.0;
     unsigned ultimoIndice=0;
     
-    gsl_matrix* O_sim=CrankNicolson(f,T-t,h,statoInizialeSim,condizioneLoc,&ultimoIstante);
+    //Prendo l'istante dell'input come istante finale per la simulazione
+    pair<double,TipoInput> istanteInput = seqInput.empty() ? pair<double,TipoInput>({-1,0}) : seqInput.front();
+    double istanteFinaleSimulazione = seqInput.empty() ? t0+T : floor(istanteInput.first/h)*h;  //Prendo l'istante più vicino all'istante dell'input per rientrare nella griglia di campionamento
+    gsl_matrix* O_sim=CrankNicolson(f,t,istanteFinaleSimulazione-t,h,statoInizialeSim,condizioneLoc,&ultimoIstante);
     
     //Aggiungo alla soluzione totale
-    ultimoIndice=floor(ultimoIstante/h);
+    ultimoIndice=floor((ultimoIstante-t)/h);
     gsl_matrix_view subMat_totale=gsl_matrix_submatrix(O_sim_totale,0,indiceIstante,y0->size,min(ultimoIndice+1,NCampioni-indiceIstante));
     gsl_matrix_view subMat_sim=gsl_matrix_submatrix(O_sim,0,0,y0->size,min(ultimoIndice+1,NCampioni-indiceIstante));
     gsl_matrix_add(&(subMat_totale.matrix),&(subMat_sim.matrix));
     
-    t += ultimoIstante;
+    t = ultimoIstante;
     indiceIstante += ultimoIndice+1;
     gsl_vector_view ultimoStato=gsl_matrix_column(O_sim,ultimoIndice);
     
     //Verifico se sono uscito per la condizione
-    if(condizioneLoc(ultimoIstante,&(ultimoStato.vector))){
+    bool verificaCondizione = condizioneLoc == nullptr ? false : condizioneLoc(t,&(ultimoStato.vector));
+    if(verificaCondizione){
       //La simulazione deve riprendere da ultimoIstante+1
       
       //Prendo la prima transizione abilitata nella mappa
@@ -123,6 +131,21 @@ gsl_matrix* Automa::Simulazione(gsl_vector* y0, TipoStato s0, double T, double h
             break;
           }
         }
+      }
+    }else if(not seqInput.empty()){
+      //Verifico la condizione di guardia se esiste
+      pair<TipoStato,TipoInput> chiave({statoAttuale,istanteInput.second});
+      auto guardia_reset=this->guardie[chiave];
+      bool transizioneAbilitata= guardia_reset.first == nullptr ? true : guardia_reset.first(t,&(ultimoStato.vector));
+      if(transizioneAbilitata){
+        //Nuovo stato
+        statoAttuale=this->transizioni[chiave].first;
+        locazioneAttuale=this->locazioni.find(statoAttuale);
+        
+        //Prendo il reset
+        if(guardia_reset.second == nullptr) gsl_vector_memcpy(statoInizialeSim,&(ultimoStato.vector));
+        else guardia_reset.second(t,&(ultimoStato.vector),statoInizialeSim);
+        seqInput.pop();
       }
     }
     gsl_matrix_free(O_sim);

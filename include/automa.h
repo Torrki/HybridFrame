@@ -14,8 +14,7 @@ class Locazione{
   void (*f_ODE)(double,gsl_vector*,gsl_vector*);
   bool (*condizione)(double,gsl_vector*);
 public:
-  
-  Locazione(TipoStato s){this->stato=s;}
+  Locazione(TipoStato s);
   TipoStato GetStato(){return this->stato;}
   
   //Operatore per usare il tipo set con Locazione
@@ -36,5 +35,5 @@ public:
   void ImpostaCondizioneLocazione(TipoStato s, bool (*f)(double,gsl_vector*));
   void ImpostaCondizioneGuardia(TipoStato s, TipoInput i, bool (*g)(double,gsl_vector*),void (*r)(double,gsl_vector*,gsl_vector*));
   
-  gsl_matrix* Simulazione(gsl_vector* y0, TipoStato s0, double T, double h);
+  gsl_matrix* Simulazione(gsl_vector* y0, TipoStato s0, double t0, double T, double h, queue<pair<double,TipoInput>> seqInput);
 };
