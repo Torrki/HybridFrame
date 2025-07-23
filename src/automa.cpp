@@ -77,13 +77,18 @@ void Automa::ImpostaCondizioneGuardia(TipoStato s, TipoInput i, bool (*g)(double
   }
 }
 
-gsl_matrix* Automa::Simulazione(gsl_vector* y0, TipoStato s0, double t0, double T, double h, queue<pair<double,TipoInput>> seqInput){
+gsl_matrix* Automa::Simulazione(gsl_vector* y0, TipoStato s0, double t0, double T, double h, queue<pair<double,TipoInput>> seqInput,
+            gsl_matrix* (*metodo_ODE)(void (*f_ODE)(double,gsl_vector*,gsl_vector*),double t0,double T, gsl_vector* y0,bool (*condizione)(double,gsl_vector*), double *tCondizione)){
+
   TipoStato statoAttuale=s0;
   auto locazioneAttuale=this->locazioni.find(s0);
   double t=t0;
   unsigned indiceIstante=0;
   unsigned NCampioni=(unsigned)floor(T/h)+1;
+  
   gsl_vector* statoInizialeSim=gsl_vector_alloc(y0->size);
+  
+  
   gsl_vector_memcpy(statoInizialeSim,y0);
   gsl_matrix* O_sim_totale=gsl_matrix_calloc(y0->size,NCampioni);
   
@@ -97,7 +102,8 @@ gsl_matrix* Automa::Simulazione(gsl_vector* y0, TipoStato s0, double t0, double 
     //Prendo l'istante dell'input come istante finale per la simulazione
     pair<double,TipoInput> istanteInput = seqInput.empty() ? pair<double,TipoInput>({-1,0}) : seqInput.front();
     double istanteFinaleSimulazione = seqInput.empty() ? t0+T : floor(istanteInput.first/h)*h;  //Prendo l'istante più vicino all'istante dell'input per rientrare nella griglia di campionamento
-    gsl_matrix* O_sim=CrankNicolson(f,t,istanteFinaleSimulazione-t,h,statoInizialeSim,condizioneLoc,&ultimoIstante);
+    
+    gsl_matrix* O_sim=metodo_ODE(f,t,istanteFinaleSimulazione-t,statoInizialeSim,condizioneLoc,&ultimoIstante);
     
     //Aggiungo alla soluzione totale
     ultimoIndice=floor((ultimoIstante-t)/h);
