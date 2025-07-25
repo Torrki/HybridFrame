@@ -77,7 +77,7 @@ void Automa::ImpostaCondizioneGuardia(TipoStato s, TipoInput i, bool (*g)(double
   }
 }
 
-gsl_matrix* Automa::Simulazione(gsl_vector* y0, TipoStato s0, double t0, double T, double h, queue<pair<double,TipoInput>> seqInput,
+pair<gsl_matrix*,queue<pair<double,TipoStato>>> Automa::Simulazione(gsl_vector* y0, TipoStato s0, double t0, double T, double h, queue<pair<double,TipoInput>> seqInput,
             gsl_matrix* (*metodo_ODE)(void (*f_ODE)(double,gsl_vector*,gsl_vector*),double t0,double T, gsl_vector* y0,bool (*condizione)(double,gsl_vector*), double *tCondizione, unsigned* iCondizione)){
 
   //Impostazione simulazione
@@ -89,6 +89,8 @@ gsl_matrix* Automa::Simulazione(gsl_vector* y0, TipoStato s0, double t0, double 
   gsl_vector* statoInizialeSim=gsl_vector_alloc(y0->size);
   gsl_vector_memcpy(statoInizialeSim,y0);
   gsl_matrix* O_sim_totale=gsl_matrix_calloc(y0->size,NumeroCampioni);
+  queue<pair<double,TipoStato>> codaStatiDiscreti=queue<pair<double,TipoStato>>();
+  codaStatiDiscreti.push(pair<double,TipoStato>({t0,s0}));
   
   while(t < t0+T){
     //Ottengo i parametri per il solver
@@ -129,14 +131,18 @@ gsl_matrix* Automa::Simulazione(gsl_vector* y0, TipoStato s0, double t0, double 
             //Nuovo stato
             statoAttuale=transizione.second.first;
             locazioneAttuale=this->locazioni.find(statoAttuale);
+            codaStatiDiscreti.push(pair<double,TipoStato>({t,statoAttuale}));
             
             //Prendo il reset, ultimoIstante e ultimoStato verificano la condizione di uscita dalla locazione
+            //ultimoStato non può stare nella soluzione numerica, uso il punultimo stato, l'ultimo che non verifica la condizione, quello in t-2h
+            gsl_vector_set_all(&(ultimoStato.vector),0.0);
+            ultimoStato= indiceSimulazione == 0 ? ultimoStato : gsl_matrix_column(O_sim_totale,indiceSimulazione-1);
             if(guardia_reset.second == nullptr) gsl_vector_memcpy(statoInizialeSim,&(ultimoStato.vector));
-            else guardia_reset.second(ultimoIstante,&(ultimoStato.vector),statoInizialeSim);
+            else guardia_reset.second(ultimoIstante-h,&(ultimoStato.vector),statoInizialeSim);
             
             //Aggiornamento per la nuova simulazione, dall'istante successivo a quello di uscita
-            t += h;
-            indiceSimulazione += 1;
+            //t += h;
+            //indiceSimulazione += 1;
             break;
           }
         }
@@ -150,20 +156,23 @@ gsl_matrix* Automa::Simulazione(gsl_vector* y0, TipoStato s0, double t0, double 
         //Nuovo stato
         statoAttuale=this->transizioni[chiave].first;
         locazioneAttuale=this->locazioni.find(statoAttuale);
+        codaStatiDiscreti.push(pair<double,TipoStato>({t,statoAttuale}));
         
         //Prendo il reset
+        gsl_vector_set_all(&(ultimoStato.vector),0.0);
+        ultimoStato= indiceSimulazione == 0 ? ultimoStato : gsl_matrix_column(O_sim_totale,indiceSimulazione-1);
         if(guardia_reset.second == nullptr) gsl_vector_memcpy(statoInizialeSim,&(ultimoStato.vector));
-        else guardia_reset.second(ultimoIstante,&(ultimoStato.vector),statoInizialeSim);
+        else guardia_reset.second(ultimoIstante-h,&(ultimoStato.vector),statoInizialeSim);
         seqInput.pop();
         
         //Aggiornamento per la nuova simulazione, dall'istante successivo a quello di uscita
-        t += h;
-        indiceSimulazione += 1;
+        //t += h;
+        //indiceSimulazione += 1;
       }
     }
     gsl_matrix_free(O_sim);
   }
   gsl_vector_free(statoInizialeSim);
   
-  return O_sim_totale;
+  return pair<gsl_matrix*,queue<pair<double,TipoStato>>>({O_sim_totale,codaStatiDiscreti});
 }
