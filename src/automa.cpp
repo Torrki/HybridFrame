@@ -1,6 +1,6 @@
 #include "../include/automa.h"
-#include <ode.h>
 #include <cmath>
+#include <stdio.h>
 
 Locazione::Locazione(TipoStato s){
   this->stato=s;
@@ -78,85 +78,80 @@ void Automa::ImpostaCondizioneGuardia(TipoStato s, TipoInput i, bool (*g)(double
 }
 
 gsl_matrix* Automa::Simulazione(gsl_vector* y0, TipoStato s0, double t0, double T, double h, queue<pair<double,TipoInput>> seqInput,
-            gsl_matrix* (*metodo_ODE)(void (*f_ODE)(double,gsl_vector*,gsl_vector*),double t0,double T, gsl_vector* y0,bool (*condizione)(double,gsl_vector*), double *tCondizione)){
+            gsl_matrix* (*metodo_ODE)(struct InfoBaseSimulazione* infoSimulazione,gsl_vector* statoIniziale)){
 
-  TipoStato statoAttuale=s0;
+  const size_t n=y0->size;
+  TipoStato statoAttualeAutoma=s0;
   auto locazioneAttuale=this->locazioni.find(s0);
-  double t=t0;
-  unsigned indiceIstante=0;
-  unsigned NCampioni=(unsigned)floor(T/h)+1;
+  gsl_vector* statoInizialeSimulazione=gsl_vector_calloc(n);
+  double t=t0,istanteCondizione=0.0;
+  size_t indiceIstante=0;
+  size_t NumeroCampioni=(size_t)floor(T/h)+1,indiceCondizione=0;
+  gsl_vector_memcpy(statoInizialeSimulazione,y0);
   
-  gsl_vector* statoInizialeSim=gsl_vector_alloc(y0->size);
+  //Matrice del calcolo totale
+  gsl_matrix* O_sim_totale=gsl_matrix_calloc(n,NumeroCampioni);
   
-  
-  gsl_vector_memcpy(statoInizialeSim,y0);
-  gsl_matrix* O_sim_totale=gsl_matrix_calloc(y0->size,NCampioni);
-  
-  while(t < t0+T){
-    //Ottengo i parametri per il solver
-    auto f=locazioneAttuale->f_ODE;
-    auto condizioneLoc=locazioneAttuale->condizione;
-    double ultimoIstante=0.0;
-    unsigned ultimoIndice=0;
+  //Simulazione a blocchi del sistema ibrido
+  struct InfoBaseSimulazione infoSimulazione;
+  for(;indiceIstante+1 < NumeroCampioni;indiceIstante += indiceCondizione+1){
+    //Impostazione della simulazione con la locazione attuale
+    infoSimulazione.dinamica=locazioneAttuale->f_ODE;
+    infoSimulazione.condizione=locazioneAttuale->condizione;
+    infoSimulazione.tCondizione=&istanteCondizione;
+    infoSimulazione.indiceCondizione=&indiceCondizione;
+    infoSimulazione.t0=t;
+    infoSimulazione.T= seqInput.empty() ? T-(t-t0) : seqInput.front().first-(t-t0);
+    infoSimulazione.h=h;
     
-    //Prendo l'istante dell'input come istante finale per la simulazione
-    pair<double,TipoInput> istanteInput = seqInput.empty() ? pair<double,TipoInput>({-1,0}) : seqInput.front();
-    double istanteFinaleSimulazione = seqInput.empty() ? t0+T : floor(istanteInput.first/h)*h;  //Prendo l'istante più vicino all'istante dell'input per rientrare nella griglia di campionamento
-    
-    gsl_matrix* O_sim=metodo_ODE(f,t,istanteFinaleSimulazione-t,statoInizialeSim,condizioneLoc,&ultimoIstante);
-    
-    //Aggiungo alla soluzione totale
-    ultimoIndice=floor((ultimoIstante-t)/h);
-    gsl_matrix_view subMat_totale=gsl_matrix_submatrix(O_sim_totale,0,indiceIstante,y0->size,min(ultimoIndice+1,NCampioni-indiceIstante));
-    gsl_matrix_view subMat_sim=gsl_matrix_submatrix(O_sim,0,0,y0->size,min(ultimoIndice+1,NCampioni-indiceIstante));
-    gsl_matrix_add(&(subMat_totale.matrix),&(subMat_sim.matrix));
-    
-    t = ultimoIstante;
-    indiceIstante += ultimoIndice+1;
-    gsl_vector_view ultimoStato=gsl_matrix_column(O_sim,ultimoIndice);
-    
-    //Verifico se sono uscito per la condizione
-    bool verificaCondizione = condizioneLoc == nullptr ? false : condizioneLoc(t,&(ultimoStato.vector));
-    if(verificaCondizione){
-      //La simulazione deve riprendere da ultimoIstante+1
+    gsl_matrix* O_sim=metodo_ODE(&infoSimulazione,statoInizialeSimulazione);
+    if(O_sim->size2 > 0){
+      gsl_vector_view ultimoStato=gsl_matrix_column(O_sim,indiceCondizione);
+      gsl_matrix_view parte_O_sim_totale=gsl_matrix_submatrix(O_sim_totale,0,indiceIstante,n,O_sim->size2);
+      gsl_matrix_add(&(parte_O_sim_totale.matrix),O_sim);
       
-      //Prendo la prima transizione abilitata nella mappa
-      for(auto transizione : this->transizioni){
-        if(transizione.first.first == statoAttuale){
-          //Verifico la condizione di guardia se esiste
-          auto guardia_reset=this->guardie[transizione.first];
-          bool transizioneAbilitata= guardia_reset.first == nullptr ? true : guardia_reset.first(t,&(ultimoStato.vector));
-          if(transizioneAbilitata){
-            //Nuovo stato
-            statoAttuale=transizione.second.first;
-            locazioneAttuale=this->locazioni.find(statoAttuale);
-            
-            //Prendo il reset
-            if(guardia_reset.second == nullptr) gsl_vector_memcpy(statoInizialeSim,&(ultimoStato.vector));
-            else guardia_reset.second(t,&(ultimoStato.vector),statoInizialeSim);
-            break;
+      //Vedo se sono uscito per la condiizone, mi serve l'ultimo stato
+      bool verificaCondizione=locazioneAttuale->condizione==nullptr ? false : locazioneAttuale->condizione(istanteCondizione,&(ultimoStato.vector));
+      if(verificaCondizione){
+        //È verificata la condizione di uscita, prendo la prima transizione disponibile
+        for(auto transizione : this->transizioni){
+          if(transizione.first.first == statoAttualeAutoma){
+            //prendo la sua condizione di guardia e la verifico
+            auto guardia_reset=this->guardie[transizione.first];
+            bool verificaGuardia = guardia_reset.first==nullptr ? true : guardia_reset.first(istanteCondizione,&(ultimoStato.vector));
+            if(verificaGuardia){
+              //Transizione dell'automa
+              statoAttualeAutoma=transizione.second.first;
+              locazioneAttuale=this->locazioni.find(statoAttualeAutoma);
+              
+              //Se c'è il reset lo eseguo
+              if(guardia_reset.second) guardia_reset.second(istanteCondizione,&(ultimoStato.vector),statoInizialeSimulazione);
+              else gsl_vector_memcpy(statoInizialeSimulazione,&(ultimoStato.vector));
+              break;
+            }
           }
         }
+      }else if(not seqInput.empty()){
+        auto Istante_Input=seqInput.front();
+        pair<TipoStato,TipoInput> coppia=pair<TipoStato,TipoInput>({statoAttualeAutoma,Istante_Input.second});
+        pair<TipoStato,TipoOutput> transizione=this->transizioni[coppia];
+        //prendo la sua condizione di guardia e la verifico
+        auto guardia_reset=this->guardie[coppia];
+        bool verificaGuardia = guardia_reset.first==nullptr ? true : guardia_reset.first(Istante_Input.first,&(ultimoStato.vector));
+        if(verificaGuardia){
+          //Transizione dell'automa
+          statoAttualeAutoma=transizione.first;
+          locazioneAttuale=this->locazioni.find(statoAttualeAutoma);
+          
+          //Se c'è il reset lo eseguo
+          if(guardia_reset.second) guardia_reset.second(Istante_Input.first,&(ultimoStato.vector),statoInizialeSimulazione);
+          else gsl_vector_memcpy(statoInizialeSimulazione,&(ultimoStato.vector));
+          seqInput.pop();
+        }
       }
-    }else if(not seqInput.empty()){
-      //Verifico la condizione di guardia se esiste
-      pair<TipoStato,TipoInput> chiave({statoAttuale,istanteInput.second});
-      auto guardia_reset=this->guardie[chiave];
-      bool transizioneAbilitata= guardia_reset.first == nullptr ? true : guardia_reset.first(t,&(ultimoStato.vector));
-      if(transizioneAbilitata){
-        //Nuovo stato
-        statoAttuale=this->transizioni[chiave].first;
-        locazioneAttuale=this->locazioni.find(statoAttuale);
-        
-        //Prendo il reset
-        if(guardia_reset.second == nullptr) gsl_vector_memcpy(statoInizialeSim,&(ultimoStato.vector));
-        else guardia_reset.second(t,&(ultimoStato.vector),statoInizialeSim);
-        seqInput.pop();
-      }
+      t = istanteCondizione+h;
+      gsl_matrix_free(O_sim);
     }
-    gsl_matrix_free(O_sim);
   }
-  gsl_vector_free(statoInizialeSim);
-  
   return O_sim_totale;
 }
