@@ -90,7 +90,9 @@ pair<gsl_matrix*,queue<pair<double,TipoStato>>> Automa::Simulazione(gsl_vector* 
   gsl_vector* statoInizialeSimulazione=gsl_vector_calloc(n);
   double t=t0,istanteCondizione=0.0;
   size_t indiceIstante=0;
-  size_t NumeroCampioni=(size_t)floor(fma(T,1.0/h,0.0))+1UL,indiceCondizione=0;
+  double divisioneLog=log10(T)-log10(h);
+  size_t NumeroCampioni=(size_t)ceil(pow(10.0,divisioneLog)),indiceCondizione=0;
+  //printf("Numero Campioni: %lu\n",NumeroCampioni);
   gsl_vector_memcpy(statoInizialeSimulazione,y0);
   //printf("erf: %.12lf\n",erf(h));
   
@@ -102,7 +104,9 @@ pair<gsl_matrix*,queue<pair<double,TipoStato>>> Automa::Simulazione(gsl_vector* 
   //Simulazione a blocchi del sistema ibrido
   struct InfoBaseSimulazione infoSimulazione;
   for(;indiceIstante < NumeroCampioni and T-t-t0 > h;indiceIstante += indiceCondizione){
-  //for(;p < 10 and T-t-t0 > h;indiceIstante += indiceCondizione){
+  unsigned p=0;
+  //for(;p < 20 and T-t-t0 > h;indiceIstante += indiceCondizione){
+    ++p;
     double istanteFinaleSimulazione=seqInput.empty() ? T+t0 : round(seqInput.front().first/h)*h; //Se ci sono input prendo l'istante di tempo nella griglia più vicino a quello nominale
     //Impostazione della simulazione con la locazione attuale
     infoSimulazione.dinamica=locazioneAttuale->f_ODE;
@@ -115,6 +119,7 @@ pair<gsl_matrix*,queue<pair<double,TipoStato>>> Automa::Simulazione(gsl_vector* 
     
     gsl_matrix* O_sim=metodo_ODE(&infoSimulazione,statoInizialeSimulazione);
     gsl_matrix_view parte_O_sim_totale=gsl_matrix_submatrix(O_sim_totale,0,indiceIstante,n,O_sim->size2);
+    //printf("Sub\n");
     gsl_matrix_add(&(parte_O_sim_totale.matrix),O_sim);
     gsl_vector_view ultimoStato=gsl_matrix_column(&(parte_O_sim_totale.matrix),indiceCondizione);
     
@@ -128,6 +133,7 @@ pair<gsl_matrix*,queue<pair<double,TipoStato>>> Automa::Simulazione(gsl_vector* 
           //prendo la sua condizione di guardia e la verifico
           auto guardia_reset=this->guardie[transizione.first];
           bool verificaGuardia = guardia_reset.first==nullptr ? true : guardia_reset.first(istanteCondizione,&(ultimoStato.vector));
+          //printf("Guardia: %d\n",verificaGuardia);
           if(verificaGuardia){
             //Transizione dell'automa
             statoAttualeAutoma=transizione.second.first;

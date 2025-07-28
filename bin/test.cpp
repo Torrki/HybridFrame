@@ -29,7 +29,7 @@ int main(int argc, char* argv[]){
   codaInput.push(pair<double,TipoInput>({1.5,1}));
   
   TipoStato s0=1;
-  double t0=0.0,T=4.0,h=1e-3;
+  double t0=0.0,T=2.0,h=1e-6;
   auto risultatoSimulazione=A1.Simulazione(&(statoIniziale.vector),s0,t0,T,h,codaInput,metodo_ODE);
   gsl_matrix* simulazione=risultatoSimulazione.first;
   gsl_matrix* evoluzioneAutoma=gsl_matrix_alloc(2,risultatoSimulazione.second.size());
