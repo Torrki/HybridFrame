@@ -26,6 +26,6 @@ with open("datiSimulazione","rb") as fileDati:
         
 tspan=np.linspace(t0,t0+T,N)
 plt.plot(tspan,O_sim.T)
-#plt.step(O_automa[0],O_automa[1],where='post')
+plt.step(O_automa[0],O_automa[1],where='post')
 plt.grid(True)
 plt.show()

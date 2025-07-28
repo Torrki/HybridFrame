@@ -36,6 +36,6 @@ public:
   void ImpostaCondizioneLocazione(TipoStato s, Condizione f);
   void ImpostaCondizioneGuardia(TipoStato s, TipoInput i, Condizione g,void (*r)(double,gsl_vector*,gsl_vector*));
   
-  gsl_matrix* Simulazione(gsl_vector* y0, TipoStato s0, double t0, double T, double h, queue<pair<double,TipoInput>> seqInput,
+  pair<gsl_matrix*,queue<pair<double,TipoStato>>> Simulazione(gsl_vector* y0, TipoStato s0, double t0, double T, double h, queue<pair<double,TipoInput>> seqInput,
               gsl_matrix* (*metodo_ODE)(struct InfoBaseSimulazione* infoSimulazione,gsl_vector* statoIniziale));
 };

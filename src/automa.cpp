@@ -77,7 +77,7 @@ void Automa::ImpostaCondizioneGuardia(TipoStato s, TipoInput i, bool (*g)(double
   }
 }
 
-gsl_matrix* Automa::Simulazione(gsl_vector* y0, TipoStato s0, double t0, double T, double h, queue<pair<double,TipoInput>> seqInput,
+pair<gsl_matrix*,queue<pair<double,TipoStato>>> Automa::Simulazione(gsl_vector* y0, TipoStato s0, double t0, double T, double h, queue<pair<double,TipoInput>> seqInput,
             gsl_matrix* (*metodo_ODE)(struct InfoBaseSimulazione* infoSimulazione,gsl_vector* statoIniziale)){
 
   const double ERRORE_PASSO_RIFERIMENTO=erf(5e-4);
@@ -96,6 +96,8 @@ gsl_matrix* Automa::Simulazione(gsl_vector* y0, TipoStato s0, double t0, double 
   
   //Matrice del calcolo totale
   gsl_matrix* O_sim_totale=gsl_matrix_calloc(n,NumeroCampioni);
+  queue<pair<double,TipoStato>> evoluzioneAutoma=queue<pair<double,TipoStato>>();
+  evoluzioneAutoma.push(pair<double,TipoStato>({t0,s0}));
   
   //Simulazione a blocchi del sistema ibrido
   struct InfoBaseSimulazione infoSimulazione;
@@ -134,6 +136,8 @@ gsl_matrix* Automa::Simulazione(gsl_vector* y0, TipoStato s0, double t0, double 
             //l'ultimo stato non soddisfa la condizione, non può stare nella soluzione numerica
             //Se c'è il reset lo eseguo
             unsigned indiceUltimoStatoValido= indiceCondizione == 0 ? 0 : indiceCondizione-1;
+            //se indiceCondizione è 0 allora già alla partenza lo stato dell'automa non è valido
+            if(indiceCondizione==0) evoluzioneAutoma.pop();
             double istanteUltimoStatoValido=fmax(infoSimulazione.t0,istanteCondizione-h);
             gsl_vector_view ultimoStatoValido=gsl_matrix_column(&(parte_O_sim_totale.matrix),indiceUltimoStatoValido);
             //gsl_vector_fprintf(stdout,&(ultimoStato.vector),"%.10lf");
@@ -143,6 +147,7 @@ gsl_matrix* Automa::Simulazione(gsl_vector* y0, TipoStato s0, double t0, double 
             gsl_vector_set_all(&(ultimoStatoValido.vector),0.0);
             istanteCondizione=istanteUltimoStatoValido;
             indiceCondizione=indiceUltimoStatoValido;
+            evoluzioneAutoma.push(pair<double,TipoStato>({istanteCondizione,statoAttualeAutoma}));
             break;
           }
         }
@@ -169,6 +174,7 @@ gsl_matrix* Automa::Simulazione(gsl_vector* y0, TipoStato s0, double t0, double 
           else gsl_vector_memcpy(statoInizialeSimulazione,&(ultimoStato.vector));
           gsl_vector_set_all(&(ultimoStato.vector),0.0);
           seqInput.pop();
+          evoluzioneAutoma.push(pair<double,TipoStato>({istanteCondizione,statoAttualeAutoma}));
           //++indiceCondizione;
         }
       }else{
@@ -179,5 +185,5 @@ gsl_matrix* Automa::Simulazione(gsl_vector* y0, TipoStato s0, double t0, double 
     t = istanteCondizione;
     gsl_matrix_free(O_sim);
   }
-  return O_sim_totale;
+  return pair<gsl_matrix*,queue<pair<double,TipoStato>>>({O_sim_totale,evoluzioneAutoma});
 }
