@@ -28,7 +28,7 @@ bool Automa::AggiungiRegola(TipoStato stato, TipoInput input, TipoStato statoSuc
     pair<TipoStato,TipoInput> chiave{stato,input};
     pair<TipoStato,TipoOutput> valore{statoSucc,output};
     this->transizioni.insert({chiave,valore});
-    this->guardie[chiave]=pair<bool (*)(double,gsl_vector*),void (*)(double,gsl_vector*,gsl_vector*)>({nullptr,nullptr});
+    this->guardie[chiave]=pair<Condizione,FunzioneReset>({nullptr,nullptr});
     ret=true;
   }
   return ret;
@@ -54,7 +54,7 @@ pair<queue<TipoStato>,queue<TipoOutput>> Automa::ValutaInput(queue<TipoInput> st
   return pair<queue<TipoStato>,queue<TipoOutput>>({evoluzione, uscita});
 }
 
-void Automa::ImpostaODE(TipoStato s, void (*f)(double,gsl_vector*,gsl_vector*)){
+void Automa::ImpostaODE(TipoStato s, ODE f){
   if(this->locazioni.contains(s)){
     auto NodoLocazione=this->locazioni.extract(s);
     NodoLocazione.value().f_ODE=f;
@@ -62,7 +62,7 @@ void Automa::ImpostaODE(TipoStato s, void (*f)(double,gsl_vector*,gsl_vector*)){
   }
 }
 
-void Automa::ImpostaCondizioneLocazione(TipoStato s, bool (*f)(double,gsl_vector*)){
+void Automa::ImpostaCondizioneLocazione(TipoStato s, Condizione f){
   if(this->locazioni.contains(s)){
     auto NodoLocazione=this->locazioni.extract(s);
     NodoLocazione.value().condizione=f;
@@ -70,126 +70,152 @@ void Automa::ImpostaCondizioneLocazione(TipoStato s, bool (*f)(double,gsl_vector
   }
 }
 
-void Automa::ImpostaCondizioneGuardia(TipoStato s, TipoInput i, bool (*g)(double,gsl_vector*),void (*r)(double,gsl_vector*,gsl_vector*)){
+void Automa::ImpostaCondizioneGuardia(TipoStato s, TipoInput i, Condizione g, FunzioneReset r){
   pair<TipoStato,TipoInput> coppia({s,i});
   if(this->transizioni.contains(coppia)){
-    this->guardie[coppia]=pair<bool (*)(double,gsl_vector*),void (*)(double,gsl_vector*,gsl_vector*)>({g,r});
+    this->guardie[coppia]=pair<Condizione,FunzioneReset>({g,r});
   }
 }
 
-pair<gsl_matrix*,queue<pair<double,TipoStato>>> Automa::Simulazione(gsl_vector* y0, TipoStato s0, double t0, double T, double h, queue<pair<double,TipoInput>> seqInput,
-            gsl_matrix* (*metodo_ODE)(struct InfoBaseSimulazione* infoSimulazione,gsl_vector* statoIniziale)){
-
-  const double ERRORE_PASSO_RIFERIMENTO=erf(5e-4);
-  if(erf(h) < ERRORE_PASSO_RIFERIMENTO){
-    printf("Warning: h è troppo piccolo, molto probabili errori macchina dovuta alla poca precisione\n");
-  }
-  const size_t n=y0->size;
-  TipoStato statoAttualeAutoma=s0;
-  auto locazioneAttuale=this->locazioni.find(s0);
-  gsl_vector* statoInizialeSimulazione=gsl_vector_calloc(n);
-  double t=t0,istanteCondizione=0.0;
-  size_t indiceIstante=0;
-  double divisioneLog=log10(T)-log10(h);
-  size_t NumeroCampioni=(size_t)ceil(pow(10.0,divisioneLog)),indiceCondizione=0;
-  //printf("Numero Campioni: %lu\n",NumeroCampioni);
-  gsl_vector_memcpy(statoInizialeSimulazione,y0);
-  //printf("erf: %.12lf\n",erf(h));
-  
-  //Matrice del calcolo totale
-  gsl_matrix* O_sim_totale=gsl_matrix_calloc(n,NumeroCampioni);
+pair<gsl_matrix*,queue<pair<double,TipoStato>>> Automa::Simulazione(double t0, gsl_vector* x0, TipoStato s0, double T, double h, MetodoODE mODE, MetodoInnesco mInnesco, unsigned passi){
+  size_t n=x0->size, p=passi-1, NumeroCampioni=(size_t)floor(pow(10.0,log10(T)-log10(h)))+1;
   queue<pair<double,TipoStato>> evoluzioneAutoma=queue<pair<double,TipoStato>>();
-  evoluzioneAutoma.push(pair<double,TipoStato>({t0,s0}));
-  
-  //Simulazione a blocchi del sistema ibrido
+  gsl_matrix* evoluzioneODE=gsl_matrix_calloc(n,NumeroCampioni);
+  gsl_matrix_view innesco;
   struct InfoBaseSimulazione infoSimulazione;
-  for(;indiceIstante < NumeroCampioni and T-t-t0 > h;indiceIstante += indiceCondizione){
-  unsigned p=0;
-  //for(;p < 20 and T-t-t0 > h;indiceIstante += indiceCondizione){
-    ++p;
-    double istanteFinaleSimulazione=seqInput.empty() ? T+t0 : round(seqInput.front().first/h)*h; //Se ci sono input prendo l'istante di tempo nella griglia più vicino a quello nominale
-    //Impostazione della simulazione con la locazione attuale
+  double istanteCondizione=0.0,t=t0;
+  size_t indiceCondizione=0;
+  bool innescoPronto=false,bloccante=true;
+  TipoStato statoAttualeAutoma=s0;
+  gsl_vector* statoInizialeODE=gsl_vector_calloc(n);
+  gsl_vector_memcpy(statoInizialeODE,x0);
+  
+  size_t o=0;
+  for(size_t indiceIstante=0; indiceIstante < NumeroCampioni-1 and o < 20;){
+    ++o;
+    innescoPronto=false;
+    bloccante=false;
+    auto locazioneAttuale=this->locazioni.find(statoAttualeAutoma);
+    
+    printf("Campioni rimanenti: %lu\tt: %.10lf\n",NumeroCampioni-indiceIstante,t);
+    size_t campioniRimanenti=NumeroCampioni-indiceIstante;
+    
+    //Preparazione innesco
+    while(not innescoPronto){
+      if(p > 0){
+        //Calcolo innesco
+        //gsl_matrix* calcoloInnesco=Innesco()
+      }else{
+        printf("p=0\n");
+        bool verificaCondizione= locazioneAttuale->condizione ? locazioneAttuale->condizione(t,statoInizialeODE) : false;
+        if(verificaCondizione){
+          bloccante=true;
+          for(auto transizione : this->transizioni){ //Se il ciclo for termina allora non ci sono transizioni abilitate per uscire dalla locazione, il sistema è bloccante
+            if(transizione.first.first == statoAttualeAutoma){
+              printf("Innesco (%lu,%lu)\n",statoAttualeAutoma,transizione.second.first);
+              
+              //Prendo guardia e reset
+              auto guardia_reset=this->guardie[transizione.first];
+              bool verificaGuardia=guardia_reset.first ? guardia_reset.first(t,statoInizialeODE) : true;
+              if(verificaGuardia){
+                printf("Guardia!\n");
+                
+                //Se c'è il reset lo applico
+                if(guardia_reset.second) guardia_reset.second(t,statoInizialeODE,statoAttualeAutoma,statoInizialeODE);
+                
+                statoAttualeAutoma = transizione.second.first;
+                locazioneAttuale=this->locazioni.find(statoAttualeAutoma);
+                bloccante=false;
+                break;
+              }else{
+              }
+            }
+          }
+          if(bloccante) innescoPronto=true;   //Forzo l'uscita per segnalare l'errore
+        }else{
+          innesco=gsl_matrix_view_vector(statoInizialeODE,n,1);
+          innescoPronto=true;
+        }
+      }
+    }
+    if(bloccante){
+      printf("Errore all'istante %.10lf: il sistema risulta bloccante nella locazione %lu\n", t, statoAttualeAutoma);
+      break;
+    }
+    
+    evoluzioneAutoma.push(pair<double,TipoStato>({t,statoAttualeAutoma}));
+    
     infoSimulazione.dinamica=locazioneAttuale->f_ODE;
     infoSimulazione.condizione=locazioneAttuale->condizione;
     infoSimulazione.tCondizione=&istanteCondizione;
     infoSimulazione.indiceCondizione=&indiceCondizione;
     infoSimulazione.t0=t;
-    infoSimulazione.T= istanteFinaleSimulazione-t;
-    infoSimulazione.h=h;
+    infoSimulazione.T=T-t;
+    infoSimulazione.h=infoSimulazione.T/(double)(campioniRimanenti-1); //Risolve il problema dell'indicizzazione, fissando il numero di campioni si evitano problemi numerici
+                                                                       //nell'indicizzazione, la variazione rispetto a h nominale è trascurabile
+    printf("T: %.10lf\t h: %e\n",infoSimulazione.T,infoSimulazione.h-h);
     
-    gsl_matrix* O_sim=metodo_ODE(&infoSimulazione,statoInizialeSimulazione);
-    gsl_matrix_view parte_O_sim_totale=gsl_matrix_submatrix(O_sim_totale,0,indiceIstante,n,O_sim->size2);
-    //printf("Sub\n");
-    gsl_matrix_add(&(parte_O_sim_totale.matrix),O_sim);
-    gsl_vector_view ultimoStato=gsl_matrix_column(&(parte_O_sim_totale.matrix),indiceCondizione);
+    printf("indiceIstante: %ld\n", indiceIstante);
     
-    //Vedo se sono uscito per la condiizone, mi serve l'ultimo stato
-    bool verificaCondizione=locazioneAttuale->condizione==nullptr ? false : locazioneAttuale->condizione(istanteCondizione,&(ultimoStato.vector));
-    //printf("Simulato\tindiceCondizione:%lu\tstatoAutoma:%lu\tcondizione:%d\tistanteCondizione: %.10lf\tdiff: %d\n",indiceCondizione,statoAttualeAutoma,verificaCondizione,istanteCondizione,T-t-t0 < h);
+    printf("-------Stato ODE-------\n");
+    gsl_vector_fprintf(stdout,statoInizialeODE,"%.10lf");
+    
+    gsl_matrix* soluzione=mODE(&infoSimulazione,&(innesco.matrix));
+    
+    //Verifico se la simulazione è stata interrotta, se la condizione non è verificata si può essere interrotta per l'arrivo dell'input
+    gsl_vector_view ultimoStato=gsl_matrix_column(soluzione,indiceCondizione);
+    printf("---------Ultimo Stato---------\n");
+    gsl_vector_fprintf(stdout,&(ultimoStato.vector),"%.10lf");
+    bool verificaCondizione= locazioneAttuale->condizione ? locazioneAttuale->condizione(istanteCondizione,&(ultimoStato.vector)) : false;
+    printf("uscito a indice: %lu\n", indiceCondizione);
     if(verificaCondizione){
-      //È verificata la condizione di uscita, prendo la prima transizione disponibile
-      for(auto transizione : this->transizioni){
+      bloccante=true;
+      for(auto transizione : this->transizioni){ //Se il ciclo for termina allora non ci sono transizioni abilitate per uscire dalla locazione, il sistema è bloccante
         if(transizione.first.first == statoAttualeAutoma){
-          //prendo la sua condizione di guardia e la verifico
+          printf("In (%lu,%lu)\n",statoAttualeAutoma,transizione.second.first);
+          
+          //Prendo guardia e reset
           auto guardia_reset=this->guardie[transizione.first];
-          bool verificaGuardia = guardia_reset.first==nullptr ? true : guardia_reset.first(istanteCondizione,&(ultimoStato.vector));
-          //printf("Guardia: %d\n",verificaGuardia);
+          bool verificaGuardia=guardia_reset.first ? guardia_reset.first(istanteCondizione,&(ultimoStato.vector)) : true;
           if(verificaGuardia){
-            //Transizione dell'automa
-            statoAttualeAutoma=transizione.second.first;
-            locazioneAttuale=this->locazioni.find(statoAttualeAutoma);
+            printf("Guardia!\n");
             
-            //l'ultimo stato non soddisfa la condizione, non può stare nella soluzione numerica
-            //Se c'è il reset lo eseguo
-            unsigned indiceUltimoStatoValido= indiceCondizione == 0 ? 0 : indiceCondizione-1;
-            //se indiceCondizione è 0 allora già alla partenza lo stato dell'automa non è valido
-            if(indiceCondizione==0) evoluzioneAutoma.pop();
-            double istanteUltimoStatoValido=fmax(infoSimulazione.t0,istanteCondizione-h);
-            gsl_vector_view ultimoStatoValido=gsl_matrix_column(&(parte_O_sim_totale.matrix),indiceUltimoStatoValido);
-            //gsl_vector_fprintf(stdout,&(ultimoStato.vector),"%.10lf");
-            if(guardia_reset.second) guardia_reset.second(istanteUltimoStatoValido,&(ultimoStatoValido.vector),statoInizialeSimulazione);
-            else gsl_vector_memcpy(statoInizialeSimulazione,&(ultimoStatoValido.vector));
-            gsl_vector_set_all(&(ultimoStato.vector),0.0);
-            gsl_vector_set_all(&(ultimoStatoValido.vector),0.0);
-            istanteCondizione=istanteUltimoStatoValido;
-            indiceCondizione=indiceUltimoStatoValido;
-            evoluzioneAutoma.push(pair<double,TipoStato>({istanteCondizione,statoAttualeAutoma}));
+            //L'innesco non può verificare la condizione di uscita
+            double istanteUltimoStatoValido = istanteCondizione-h;
+            size_t indiceUltimoStatoValido = indiceCondizione-1;
+            gsl_vector_view ultimoStatoValido = gsl_matrix_column(soluzione,indiceUltimoStatoValido);
+            
+            //Se c'è il reset lo applico
+            if(guardia_reset.second) guardia_reset.second(istanteUltimoStatoValido,&(ultimoStatoValido.vector),statoAttualeAutoma,statoInizialeODE);
+            else gsl_vector_memcpy(statoInizialeODE,&(ultimoStatoValido.vector));
+            
+            //Cancellazione stato non valido
+            gsl_vector_set_zero(&(ultimoStato.vector));
+            statoAttualeAutoma = transizione.second.first;
+            bloccante=false;
             break;
+          }else{
           }
         }
       }
-    }else if(not seqInput.empty()){
-      auto Istante_Input=seqInput.front();
-      pair<TipoStato,TipoInput> coppia=pair<TipoStato,TipoInput>({statoAttualeAutoma,Istante_Input.second});
-      if(this->transizioni.contains(coppia)){ //Se esiste la transizione statoAttuale-input
-        //printf("Input\n");
-        pair<TipoStato,TipoOutput> transizione=this->transizioni[coppia];
-        //prendo la sua condizione di guardia e la verifico
-        auto guardia_reset=this->guardie[coppia];
-        bool verificaGuardia = guardia_reset.first==nullptr ? true : guardia_reset.first(Istante_Input.first,&(ultimoStato.vector));
-        if(verificaGuardia){
-          //Transizione dell'automa
-          statoAttualeAutoma=transizione.first;
-          locazioneAttuale=this->locazioni.find(statoAttualeAutoma);
-          
-          //l'ultimo stato è quello dell'istante dell'input, può stare nella soluzione numerica
-          //unsigned indiceUltimoStatoValido= indiceCondizione == 0 ? 0 : indiceCondizione-1;
-          //double istanteUltimoStatoValido=fmax(infoSimulazione.t0,istanteCondizione-h);
-          //gsl_vector_view ultimoStatoValido=gsl_matrix_column(O_sim,indiceUltimoStatoValido);
-          if(guardia_reset.second) guardia_reset.second(istanteCondizione,&(ultimoStato.vector),statoInizialeSimulazione);
-          else gsl_vector_memcpy(statoInizialeSimulazione,&(ultimoStato.vector));
-          gsl_vector_set_all(&(ultimoStato.vector),0.0);
-          seqInput.pop();
-          evoluzioneAutoma.push(pair<double,TipoStato>({istanteCondizione,statoAttualeAutoma}));
-          //++indiceCondizione;
-        }
-      }else{
-        fprintf(stderr,"Errore all'istante %.12lf: Non esiste la transizione (%lu,%lu)\n", Istante_Input.first, statoAttualeAutoma,Istante_Input.second);
-        break;
-      }
+    }else{
+      //Sono uscito perchè è scaduto il periodo, non ci sono stati da eliminare
+      indiceCondizione++;
+      istanteCondizione=t0+T;
+      //gsl_vector_memcpy(statoInizialeODE,&(ultimoStato.vector));
     }
-    t = istanteCondizione;
-    gsl_matrix_free(O_sim);
+    if(bloccante){
+      printf("Errore all'istante %.10lf: il sistema risulta bloccante nella locazione %lu\n", istanteCondizione, statoAttualeAutoma);
+      break;
+    }
+    
+    //Aggiornamento cursori e matrici
+    gsl_matrix_view parteTotale=gsl_matrix_submatrix(evoluzioneODE,0,indiceIstante,n,soluzione->size2);
+    gsl_matrix_add(&(parteTotale.matrix),soluzione);
+    indiceIstante += indiceCondizione;
+    t=istanteCondizione;
+    printf("Istante finale: %.10lf\n",t);
   }
-  return pair<gsl_matrix*,queue<pair<double,TipoStato>>>({O_sim_totale,evoluzioneAutoma});
+  pair<gsl_matrix*,queue<pair<double,TipoStato>>> res=pair<gsl_matrix*,queue<pair<double,TipoStato>>>({evoluzioneODE,evoluzioneAutoma});
+  return res;
 }

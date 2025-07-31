@@ -9,6 +9,9 @@ using namespace std;
 typedef unsigned long TipoStato;
 typedef long TipoInput;
 typedef long TipoOutput;
+typedef gsl_matrix* (*MetodoODE)(struct InfoBaseSimulazione*,gsl_matrix*);
+typedef gsl_matrix* (*MetodoInnesco)(struct InfoBaseSimulazione*,gsl_vector*);
+typedef void (*FunzioneReset)(double,gsl_vector*,TipoStato,gsl_vector*);
 
 class Locazione{
   TipoStato stato;
@@ -26,7 +29,7 @@ public:
 class Automa{
   set<Locazione> locazioni;
   map<pair<TipoStato,TipoInput>,pair<TipoStato,TipoOutput>> transizioni;
-  map<pair<TipoStato,TipoInput>,pair<Condizione,void (*)(double,gsl_vector*,gsl_vector*)>> guardie;
+  map<pair<TipoStato,TipoInput>,pair<Condizione,FunzioneReset>> guardie;
 public:
   Automa(set<TipoStato> stati);
   Automa(set<TipoStato>& stati);
@@ -34,8 +37,6 @@ public:
   pair<queue<TipoStato>,queue<TipoOutput>> ValutaInput(queue<TipoInput> stringaInput,TipoStato s0);
   void ImpostaODE(TipoStato s, ODE f);
   void ImpostaCondizioneLocazione(TipoStato s, Condizione f);
-  void ImpostaCondizioneGuardia(TipoStato s, TipoInput i, Condizione g,void (*r)(double,gsl_vector*,gsl_vector*));
-  
-  pair<gsl_matrix*,queue<pair<double,TipoStato>>> Simulazione(gsl_vector* y0, TipoStato s0, double t0, double T, double h, queue<pair<double,TipoInput>> seqInput,
-              gsl_matrix* (*metodo_ODE)(struct InfoBaseSimulazione* infoSimulazione,gsl_vector* statoIniziale));
+  void ImpostaCondizioneGuardia(TipoStato s, TipoInput i, Condizione g,FunzioneReset r);
+  pair<gsl_matrix*,queue<pair<double,TipoStato>>> Simulazione(double t0, gsl_vector* x0, TipoStato s0, double T, double h, MetodoODE ODE, MetodoInnesco Innesco, unsigned passi);
 };
