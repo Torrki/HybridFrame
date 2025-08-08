@@ -192,6 +192,7 @@ pair<gsl_matrix*,queue<pair<double,TipoStato>>> Automa::Simulazione(double t0, g
     //Se ci sono degli input quantizzo il loro istante e lo metto come istante finale della simulazione
     double istanteInputQuantizzatoH=inputs.empty() ? -1.0 : floor(inputs.front().first/h)*h;
     double istanteFinale=inputs.empty() ? istanteFinaleSimulazione : istanteInputQuantizzatoH;
+    bool innescoInterrottoInput=false;
     
     //Lo stato dell'automa in questo istante è valido
     evoluzioneAutoma.push(pair<double,TipoStato>({t,statoAttualeAutoma}));
@@ -207,6 +208,7 @@ pair<gsl_matrix*,queue<pair<double,TipoStato>>> Automa::Simulazione(double t0, g
     }else{
       LogMessaggio(fileLog,0,t,"Fase Innesco");
       size_t campioniRimanenti=(size_t)floor((istanteFinale-t)/h)+1;
+      innescoInterrottoInput = campioniRimanenti-1 <= p;
       infoSimulazione.T=(double)min(p,campioniRimanenti-1)*h;
     }
     
@@ -259,7 +261,7 @@ pair<gsl_matrix*,queue<pair<double,TipoStato>>> Automa::Simulazione(double t0, g
     }else{
       //Sono uscito perchè è scaduto il periodo, non ci sono stati da eliminare      
       //Se ci sono degli input da elaborare, è arrivato il loro istante
-      if(not inputs.empty()){
+      if((not inputs.empty() and innescoPronto) or (not inputs.empty() and not innescoPronto and innescoInterrottoInput)){
         TipoInput InputAttuale=inputs.front().second;
         sprintf(argomentiMessaggi,"Arrivato input %lu nella locazione %lu",InputAttuale,statoAttualeAutoma);
         LogMessaggio(fileLog,0,istanteCondizione,argomentiMessaggi);
