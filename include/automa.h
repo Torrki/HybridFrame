@@ -12,6 +12,7 @@ typedef long TipoOutput;
 typedef gsl_matrix* (*MetodoODE)(struct InfoBaseSimulazione*,gsl_matrix*);
 typedef gsl_matrix* (*MetodoInnesco)(struct InfoBaseSimulazione*,gsl_vector*);
 typedef void (*FunzioneReset)(double,gsl_vector*,TipoStato,gsl_vector*);
+typedef queue<pair<double,TipoInput>> CodaInput;
 
 class Locazione{
   TipoStato stato;
@@ -38,5 +39,6 @@ public:
   void ImpostaODE(TipoStato s, ODE f);
   void ImpostaCondizioneLocazione(TipoStato s, Condizione f);
   void ImpostaCondizioneGuardia(TipoStato s, TipoInput i, Condizione g,FunzioneReset r);
-  pair<gsl_matrix*,queue<pair<double,TipoStato>>> Simulazione(double t0, gsl_vector* x0, TipoStato s0, double T, double h, MetodoODE ODE, MetodoInnesco Innesco, unsigned passi);
+  pair<gsl_matrix*,queue<pair<double,TipoStato>>> Simulazione(double t0, gsl_vector* x0, TipoStato s0, CodaInput inputs, double T, double h, 
+                                                              MetodoODE ODE, MetodoInnesco Innesco, unsigned passi);
 };

@@ -24,17 +24,22 @@ int main(int argc, char* argv[]){
   SistemaIbrido.ImpostaCondizioneLocazione(0,Condizione1);
   SistemaIbrido.ImpostaCondizioneLocazione(1,Condizione2);
   SistemaIbrido.ImpostaCondizioneLocazione(2,Condizione3);
-  
   SistemaIbrido.AggiungiRegola(0,2,2,0);
   SistemaIbrido.AggiungiRegola(2,1,1,2);
   SistemaIbrido.AggiungiRegola(1,2,2,1);
+  
+  CodaInput segnaliAutoma=CodaInput();
+  segnaliAutoma.push(pair<double,TipoInput>({1.0,2}));
+  segnaliAutoma.push(pair<double,TipoInput>({1.2,2}));
+  segnaliAutoma.push(pair<double,TipoInput>({1.8,1}));
+  //segnaliAutoma.push(pair<double,TipoInput>({1.8,1}));
   
   double x0[]={5e-1,-5e-1};
   TipoStato s0=0;
   double t0=0.0,T=2.1,h=1e-3;
   
   gsl_vector_view x0_vect=gsl_vector_view_array(x0,2);
-  auto risultato=SistemaIbrido.Simulazione(t0,&(x0_vect.vector),s0,T,h,metodoPerODE,metodoPerInnesco,1);
+  auto risultato=SistemaIbrido.Simulazione(t0,&(x0_vect.vector),s0,segnaliAutoma,T,h,metodoPerODE,metodoPerInnesco,1);
   
   gsl_matrix* simulazione=risultato.first;
   gsl_matrix* evoluzioneAutoma=gsl_matrix_alloc(2,risultato.second.size());
@@ -86,7 +91,8 @@ void Sistema2(double t,gsl_vector* y,gsl_vector* dy){
 }
 
 void Sistema3(double t,gsl_vector* y,gsl_vector* dy){
-  gsl_vector_set_zero(dy);
+  gsl_vector_memcpy(dy,y);
+  gsl_vector_scale(dy,-4.0);
 }
 
 gsl_matrix* metodoPerODE(struct InfoBaseSimulazione* info,gsl_matrix* innesco){
